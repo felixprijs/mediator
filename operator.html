@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operator Panel — AI Mediator</title>
+  <script src="interventions.js"></script>
+  <script src="chat-replies.js"></script>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #090912;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      padding: 32px 36px;
+      min-height: 100vh;
+      color: #d8daf0;
+    }
+
+    h1 {
+      font-size: 17px;
+      font-weight: 700;
+      color: #d8daf0;
+      margin-bottom: 3px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: #44445a;
+      margin-bottom: 24px;
+      letter-spacing: 0.02em;
+    }
+
+    /* ── Status bar ─────────────────────────────────────────────────────── */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      background: #12121e;
+      border: 1px solid #2a2a44;
+      border-radius: 8px;
+      margin-bottom: 24px;
+      font-size: 13px;
+      color: #7070a0;
+    }
+
+    #s-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #33334a;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+
+    #s-dot.active   { background: #2ecf82; box-shadow: 0 0 6px rgba(46,207,130,0.6); }
+    #s-dot.speaking { background: #f0a030; box-shadow: 0 0 6px rgba(240,160,48,0.6); }
+
+    /* ── Two-column main area ───────────────────────────────────────────── */
+    #main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 1100px) {
+      #main { grid-template-columns: 1fr; }
+    }
+
+    .col-heading {
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #5a5a80;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    /* ── Intervention grid ──────────────────────────────────────────────── */
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .iv-btn {
+      padding: 14px 16px;
+      background: #12121e;
+      border: 1.5px solid #2a2a44;
+      border-radius: 10px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s, border-color 0.12s, transform 0.08s;
+    }
+
+    .iv-btn:hover {
+      background: #1a1a30;
+      border-color: #6060a0;
+    }
+
+    .iv-btn:active { transform: scale(0.97); }
+
+    .iv-btn.triggered {
+      background: #1a1a40;
+      border-color: #5555cc;
+    }
+
+    .iv-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #c8caee;
+      margin-bottom: 4px;
+    }
+
+    .iv-btn.triggered .iv-title { color: #aaaaff; }
+
+    .iv-preview {
+      font-size: 11.5px;
+      color: #44445a;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .iv-btn.triggered .iv-preview { color: #6666aa; }
+
+    /* ── Reset button ───────────────────────────────────────────────────── */
+    #reset-btn {
+      padding: 10px 20px;
+      background: transparent;
+      border: 2px solid #882222;
+      border-radius: 8px;
+      color: #cc4444;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    #reset-btn:hover { background: #882222; color: #fff; }
+
+    /* ── Messages panel ─────────────────────────────────────────────────── */
+    #msg-panel {
+      background: #12121e;
+      border: 1px solid #2a2a44;
+      border-radius: 10px;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      min-height: 480px;
+      max-height: 720px;
+    }
+
+    #msg-panel-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    #msg-panel-header .col-heading { margin-bottom: 0; }
+
+    #participant-count {
+      margin-left: auto;
+      font-size: 11px;
+      color: #5a5a80;
+    }
+
+    #thread {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 4px;
+      margin-bottom: 12px;
+    }
+
+    #thread::-webkit-scrollbar { width: 6px; }
+    #thread::-webkit-scrollbar-thumb { background: #2a2a44; border-radius: 3px; }
+
+    .msg-empty {
+      color: #33334a;
+      font-size: 12px;
+      font-style: italic;
+      text-align: center;
+      margin: auto 0;
+    }
+
+    .chat-msg {
+      padding: 9px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+      max-width: 92%;
+      word-wrap: break-word;
+    }
+
+    .chat-msg.from-participant {
+      align-self: flex-start;
+      background: #1a1a30;
+      border: 1px solid #2a2a50;
+    }
+
+    .chat-msg.from-participant.unread {
+      border-color: #5555cc;
+      box-shadow: 0 0 0 2px rgba(85,85,204,0.15);
+    }
+
+    .chat-msg.from-mediator {
+      align-self: flex-end;
+      background: #2a2a50;
+      border: 1px solid #3a3a70;
+      color: #d8daf0;
+    }
+
+    .chat-msg-meta {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6666aa;
+      margin-bottom: 3px;
+      display: flex;
+      gap: 8px;
+    }
+
+    .chat-msg.from-mediator .chat-msg-meta { color: #aaaaff; justify-content: flex-end; }
+
+    .chat-msg-time { color: #44445a; }
+
+    /* Reply composer */
+    #reply-area {
+      border-top: 1px solid #1a1a2a;
+      padding-top: 12px;
+    }
+
+    #reply-target {
+      font-size: 11.5px;
+      color: #5a5a80;
+      margin-bottom: 8px;
+      min-height: 16px;
+    }
+
+    #reply-target b { color: #aaaaff; font-weight: 600; }
+
+    #reply-btns {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 6px;
+    }
+
+    .reply-btn {
+      padding: 8px 10px;
+      background: #090912;
+      border: 1.5px solid #2a2a44;
+      border-radius: 7px;
+      color: #c8caee;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .reply-btn:hover:not(:disabled) {
+      background: #1a1a30;
+      border-color: #6060a0;
+    }
+
+    .reply-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .reply-btn-title { font-weight: 600; margin-bottom: 2px; }
+    .reply-btn-preview {
+      font-size: 10.5px;
+      color: #5a5a80;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* ── Session log ────────────────────────────────────────────────────── */
+    #log {
+      background: #12121e;
+      border: 1px solid #2a2a44;
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+
+    #log-heading {
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #33334a;
+      margin-bottom: 10px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #log-heading a {
+      margin-left: auto;
+      color: #5a5a80;
+      text-decoration: none;
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+    }
+    #log-heading a:hover { color: #aaaaff; }
+
+    #log-list {
+      max-height: 160px;
+      overflow-y: auto;
+    }
+
+    .log-row {
+      padding: 5px 0;
+      border-bottom: 1px solid #1a1a2a;
+      font-size: 12.5px;
+      color: #7070a0;
+      display: flex;
+      gap: 10px;
+    }
+
+    .log-row:last-child { border-bottom: none; }
+
+    .log-time { color: #33334a; flex-shrink: 0; }
+
+    .empty-log { color: #33334a; font-size: 12px; font-style: italic; }
+  </style>
+</head>
+<body>
+
+  <h1>AI Mediator — Operator Panel</h1>
+  <p class="subtitle">Researcher controls only. Not visible to participants.</p>
+
+  <div id="status-bar">
+    <span id="s-dot"></span>
+    <span id="s-text">Ready — waiting for participant screen</span>
+  </div>
+
+  <!-- ── Two-column layout: group intervention buttons + private chat ── -->
+  <div id="main">
+    <div>
+      <div class="col-heading">Group interventions (plays on mediator screen)</div>
+      <div id="grid"></div>
+      <button id="reset-btn">↺  Return to Listening</button>
+    </div>
+
+    <div id="msg-panel">
+      <div id="msg-panel-header">
+        <span class="col-heading">Private messages (text channel)</span>
+        <span id="participant-count">0 participants</span>
+      </div>
+      <div id="thread">
+        <div class="msg-empty">No participants have joined yet.<br>They can join at <code>/chat.html</code>.</div>
+      </div>
+      <div id="reply-area">
+        <div id="reply-target">No message selected</div>
+        <div id="reply-btns"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="log">
+    <div id="log-heading">
+      <span>Session log</span>
+      <a href="/api/log" target="_blank">Download JSON ↓</a>
+    </div>
+    <div id="log-list"><div class="empty-log">No interventions triggered yet.</div></div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────────
+       PART 1 — Original intervention logic (BroadcastChannel to mediator screen).
+       Left intact from your existing operator.html.
+       ───────────────────────────────────────────────────────────────────── -->
+  <script>
+    const channel = new BroadcastChannel('ai_mediator_v1');
+    let activeBtn = null;
+
+    const grid = document.getElementById('grid');
+    INTERVENTIONS.forEach(iv => {
+      const btn = document.createElement('button');
+      btn.className   = 'iv-btn';
+      btn.dataset.id  = iv.id;
+      btn.innerHTML   = `<div class="iv-title">${iv.title}</div><div class="iv-preview">${iv.text}</div>`;
+      btn.addEventListener('click', () => trigger(iv, btn));
+      grid.appendChild(btn);
+    });
+
+    function trigger(iv, btn) {
+      if (activeBtn) activeBtn.classList.remove('triggered');
+      activeBtn = btn;
+      btn.classList.add('triggered');
+      channel.postMessage({ type: 'trigger', intervention: iv });
+      setStatus('speaking', `Speaking: ${iv.title}`);
+      addLog(iv.title);
+    }
+
+    document.getElementById('reset-btn').addEventListener('click', () => {
+      clearActive();
+      channel.postMessage({ type: 'reset' });
+      setStatus('', 'Manually returned to listening');
+    });
+
+    channel.onmessage = (e) => {
+      if (e.data.type === 'listening') {
+        clearActive();
+        setStatus('active', 'Listening — intervention finished');
+      }
+    };
+
+    function clearActive() {
+      if (activeBtn) { activeBtn.classList.remove('triggered'); activeBtn = null; }
+    }
+
+    function setStatus(dotClass, text) {
+      document.getElementById('s-dot').className = dotClass;
+      document.getElementById('s-text').textContent = text;
+    }
+
+    function addLog(title) {
+      const list = document.getElementById('log-list');
+      const empty = list.querySelector('.empty-log');
+      if (empty) empty.remove();
+      const now = new Date().toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      const row = document.createElement('div');
+      row.className = 'log-row';
+      row.innerHTML = `<span class="log-time">${now}</span><span>${title}</span>`;
+      list.appendChild(row);
+      list.scrollTop = list.scrollHeight;
+    }
+
+    setStatus('active', 'Ready — open participant.html in a second window');
+  </script>
+
+  <!-- ─────────────────────────────────────────────────────────────────────
+       PART 2 — NEW: private chat channel (SSE + POST via server.js).
+       ───────────────────────────────────────────────────────────────────── -->
+  <script>
+    // State
+    const participantsMap = new Map(); // id → { id, name, joinedAt, messages:[], unread:0 }
+    let selectedId = null;
+
+    // Elements
+    const threadEl        = document.getElementById('thread');
+    const replyTargetEl   = document.getElementById('reply-target');
+    const replyBtnsEl     = document.getElementById('reply-btns');
+    const participantEl   = document.getElementById('participant-count');
+
+    // ─── Build reply buttons from CHAT_REPLIES ──────────────────────────
+    CHAT_REPLIES.forEach(r => {
+      const b = document.createElement('button');
+      b.className = 'reply-btn';
+      b.disabled = true;
+      b.innerHTML = `<div class="reply-btn-title">${r.title}</div><div class="reply-btn-preview">${r.text}</div>`;
+      b.addEventListener('click', () => sendReply(r));
+      replyBtnsEl.appendChild(b);
+    });
+
+    function setRepliesEnabled(on) {
+      replyBtnsEl.querySelectorAll('.reply-btn').forEach(b => b.disabled = !on);
+    }
+
+    // ─── SSE connection ─────────────────────────────────────────────────
+    const es = new EventSource('/api/events?role=operator');
+
+    es.onmessage = (e) => {
+      let d; try { d = JSON.parse(e.data); } catch (err) { return; }
+
+      if (d.type === 'snapshot') {
+        // Re-hydrate from server state after a reconnect
+        d.participants.forEach(p => addOrUpdateParticipant(p));
+        d.messages.forEach(m => absorbMessage(m));
+        render();
+      } else if (d.type === 'participant_joined') {
+        addOrUpdateParticipant(d.participant);
+        render();
+        addLog('Joined chat: ' + d.participant.name);
+      } else if (d.type === 'participant_message') {
+        absorbMessage(d.message);
+        const p = participantsMap.get(d.message.participantId);
+        if (p && selectedId !== p.id) p.unread++;
+        render();
+      } else if (d.type === 'mediator_message_sent') {
+        absorbMessage(d.message);
+        render();
+      } else if (d.type === 'session_reset') {
+        participantsMap.clear();
+        selectedId = null;
+        render();
+      }
+    };
+
+    function addOrUpdateParticipant(p) {
+      if (!participantsMap.has(p.id)) {
+        participantsMap.set(p.id, { ...p, messages: [], unread: 0 });
+      } else {
+        Object.assign(participantsMap.get(p.id), p);
+      }
+      // Auto-select the first participant so the researcher can reply immediately
+      if (!selectedId) selectedId = p.id;
+    }
+
+    function absorbMessage(m) {
+      const p = participantsMap.get(m.participantId);
+      if (!p) return;
+      // dedupe on id
+      if (!p.messages.some(x => x.id === m.id)) p.messages.push(m);
+    }
+
+    // ─── Rendering ──────────────────────────────────────────────────────
+    function render() {
+      renderParticipantCount();
+      renderThread();
+      renderReplyTarget();
+    }
+
+    function renderParticipantCount() {
+      const n = participantsMap.size;
+      participantEl.textContent = n + (n === 1 ? ' participant' : ' participants');
+    }
+
+    function renderThread() {
+      threadEl.innerHTML = '';
+
+      if (participantsMap.size === 0) {
+        const e = document.createElement('div');
+        e.className = 'msg-empty';
+        e.innerHTML = 'No participants have joined yet.<br>They can join at <code>/chat.html</code>.';
+        threadEl.appendChild(e);
+        return;
+      }
+
+      // Participant chip row (for switching threads)
+      const chipRow = document.createElement('div');
+      chipRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;';
+      for (const p of participantsMap.values()) {
+        const chip = document.createElement('button');
+        const isSel = p.id === selectedId;
+        chip.style.cssText = `
+          padding: 5px 10px; border-radius: 6px; font-size: 11.5px; cursor: pointer;
+          background: ${isSel ? '#2a2a50' : '#090912'};
+          border: 1.5px solid ${isSel ? '#5555cc' : '#2a2a44'};
+          color: ${isSel ? '#d8daf0' : '#7070a0'};
+          font-family: inherit;
+        `;
+        chip.textContent = p.name + (p.unread > 0 ? ` (${p.unread})` : '');
+        chip.addEventListener('click', () => {
+          selectedId = p.id;
+          p.unread = 0;
+          render();
+        });
+        chipRow.appendChild(chip);
+      }
+      threadEl.appendChild(chipRow);
+
+      // Messages of the selected participant
+      const sel = participantsMap.get(selectedId);
+      if (!sel) return;
+
+      if (sel.messages.length === 0) {
+        const e = document.createElement('div');
+        e.className = 'msg-empty';
+        e.textContent = `${sel.name} hasn't sent anything yet.`;
+        threadEl.appendChild(e);
+        return;
+      }
+
+      for (const m of sel.messages) {
+        const el = document.createElement('div');
+        el.className = 'chat-msg from-' + m.from;
+        const meta = document.createElement('div');
+        meta.className = 'chat-msg-meta';
+        const name = m.from === 'participant' ? sel.name : 'Mediator';
+        const time = new Date(m.timestamp).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+        meta.innerHTML = `<span>${escapeHtml(name)}</span><span class="chat-msg-time">${time}</span>`;
+        const body = document.createElement('div');
+        body.textContent = m.text;
+        el.appendChild(meta);
+        el.appendChild(body);
+        threadEl.appendChild(el);
+      }
+      threadEl.scrollTop = threadEl.scrollHeight;
+    }
+
+    function renderReplyTarget() {
+      const sel = selectedId && participantsMap.get(selectedId);
+      if (!sel) {
+        replyTargetEl.textContent = 'No participant selected';
+        setRepliesEnabled(false);
+      } else {
+        replyTargetEl.innerHTML = `Reply privately to <b>${escapeHtml(sel.name)}</b>`;
+        setRepliesEnabled(true);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+      }[c]));
+    }
+
+    // ─── Send a pre-scripted reply ──────────────────────────────────────
+    async function sendReply(reply) {
+      if (!selectedId) return;
+      const target = participantsMap.get(selectedId);
+      setRepliesEnabled(false);
+
+      try {
+        await fetch('/api/reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            participantId: selectedId,
+            text: reply.text,
+            replyId: reply.id,
+          }),
+        });
+        addLog(`Replied to ${target ? target.name : '?'}: ${reply.title}`);
+      } catch (err) {
+        addLog(`Reply failed: ${err.message || err}`);
+      } finally {
+        setRepliesEnabled(true);
+      }
+    }
+  </script>
+</body>
+</html>

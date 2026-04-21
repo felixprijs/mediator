@@ -1,0 +1,13 @@
+{
+  "name": "mediator",
+  "version": "1.0.0",
+  "description": "AI Mediator prototype for microaggression research study",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}

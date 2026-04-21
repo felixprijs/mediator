@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Mediator</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #090912;
+      color: #d8daf0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      overflow: hidden;
+      padding: 44px 64px 52px;
+      user-select: none;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    #header {
+      align-self: center;
+      font-size: 16px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #6060a0;
+      font-weight: 600;
+    }
+
+    /* ── Main centre area ───────────────────────────────────────────────── */
+    #main {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 48px;
+    }
+
+    /* ── Intervention text ──────────────────────────────────────────────── */
+    #intervention-wrap {
+      min-height: 90px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 720px;
+      width: 100%;
+    }
+
+    #intervention-text {
+      font-size: clamp(18px, 2.4vw, 28px);
+      line-height: 1.55;
+      color: #eceeff;
+      font-weight: 300;
+      letter-spacing: 0.015em;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.55s ease;
+    }
+
+    #intervention-text.visible { opacity: 1; }
+
+    /* ── Visualizer wrapper ──────────────────────────────────────────────── */
+    #viz-wrap {
+      position: relative;
+      width: min(360px, 60vw);
+      height: min(360px, 60vw);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #waveform {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* ── Centre dot ─────────────────────────────────────────────────────── */
+    #dot {
+      position: relative;
+      z-index: 2;
+      width: min(100px, 17vw);
+      height: min(100px, 17vw);
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.4s, box-shadow 0.4s;
+    }
+
+    #dot.listening {
+      background: #c0231f;
+      box-shadow: 0 0 22px 8px rgba(192, 35, 31, 0.45);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    #dot.speaking {
+      background: #00cc66;
+      box-shadow: 0 0 22px 8px rgba(0, 204, 102, 0.45);
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1;    box-shadow: 0 0 22px 8px rgba(192,35,31,0.45); }
+      50%       { opacity: 0.3; box-shadow: 0 0  8px 3px rgba(192,35,31,0.15); }
+    }
+
+    /* ── Status label ───────────────────────────────────────────────────── */
+    #status {
+      display: flex;
+      align-items: center;
+    }
+
+    #status-label {
+      font-size: 14px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: #55556e;
+      transition: color 0.4s;
+    }
+
+    #status-label.speaking { color: #00ff88; }
+  </style>
+</head>
+<body>
+
+  <div id="header">AI Mediator</div>
+
+  <div id="main">
+    <div id="intervention-wrap">
+      <p id="intervention-text"></p>
+    </div>
+
+    <div id="viz-wrap">
+      <canvas id="waveform"></canvas>
+      <span id="dot" class="listening"></span>
+    </div>
+
+    <div id="status">
+      <span id="status-label">Listening</span>
+    </div>
+  </div>
+
+  <script>
+    // ── Canvas setup ───────────────────────────────────────────────────────
+    const canvas = document.getElementById('waveform');
+    const ctx    = canvas.getContext('2d');
+    const dpr    = window.devicePixelRatio || 1;
+
+    function resizeCanvas() {
+      canvas.width  = canvas.offsetWidth  * dpr;
+      canvas.height = canvas.offsetHeight * dpr;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // ── State ──────────────────────────────────────────────────────────────
+    const dot    = document.getElementById('dot');
+    const label  = document.getElementById('status-label');
+    const textEl = document.getElementById('intervention-text');
+
+    let state        = 'listening';
+    let animFrame    = null;
+    let analyser     = null;
+    let micData      = null;
+    let phase        = 0;
+    let currentAudio = null;
+
+    const BAR_COUNT = 100;
+    const smoothed  = new Float32Array(BAR_COUNT).fill(0);
+
+    // ── Microphone init ────────────────────────────────────────────────────
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.75;
+        src.connect(analyser);
+        micData = new Uint8Array(analyser.frequencyBinCount);
+      } catch (_) { /* animated fallback */ }
+      startDraw();
+    })();
+
+    // ── Draw a glowing dot ─────────────────────────────────────────────────
+    function glowDot(x, y, r, color, glowColor, glowBlur) {
+      if (glowColor) {
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur  = glowBlur || r * 3;
+      }
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // ── Main animation loop ────────────────────────────────────────────────
+    function startDraw() {
+      cancelAnimationFrame(animFrame);
+
+      function frame() {
+        animFrame = requestAnimationFrame(frame);
+        phase += 0.025;
+
+        const W  = canvas.width, H = canvas.height;
+        const cx = W / 2,        cy = H / 2;
+        const minDim = Math.min(W, H);
+
+        // Gap between centre dot edge and ring inner edge
+        const dotCSSPx = dot.offsetWidth;
+        const dotCanvasPx = dotCSSPx * dpr;
+        const GAP = 10 * dpr;
+
+        const R_inner = dotCanvasPx / 2 + GAP;
+        const R_outer = minDim * 0.48;
+
+        const DOT_SEGS = 6;
+        const DOT_R    = Math.max(2.5, minDim * 0.013);
+
+        ctx.clearRect(0, 0, W, H);
+
+        // ── Compute per-bar heights ───────────────────────────────────
+        const heights = new Float32Array(BAR_COUNT);
+
+        // Always-on animated wave base (keeps it dynamic even in silence)
+        for (let i = 0; i < BAR_COUNT; i++) {
+          const a = (i / BAR_COUNT) * Math.PI * 2;
+          heights[i] =
+            0.08 * Math.abs(Math.sin(a * 2  + phase * 0.9)) +
+            0.06 * Math.abs(Math.sin(a * 5  - phase * 1.3)) +
+            0.04 * Math.abs(Math.sin(a * 9  + phase * 0.7)) +
+            0.03 * Math.abs(Math.sin(a * 13 - phase * 0.5));
+        }
+
+        if (state === 'speaking') {
+          // Same gentle idle style as listening, just slightly fuller
+          for (let i = 0; i < BAR_COUNT; i++) {
+            const a = (i / BAR_COUNT) * Math.PI * 2;
+            heights[i] += 0.12
+              + 0.10 * Math.abs(Math.sin(a * 3 + phase * 0.7))
+              + 0.07 * Math.abs(Math.sin(a * 6 - phase * 0.5))
+              + 0.05 * Math.abs(Math.sin(a * 11 + phase * 0.4));
+          }
+        } else if (analyser) {
+          // Mic: spread freq bins symmetrically around the full circle
+          analyser.getByteFrequencyData(micData);
+          const half = Math.floor(BAR_COUNT / 2);
+          for (let i = 0; i < half; i++) {
+            // Map 0…half to the useful low-mid frequency range (first 40% of bins)
+            const binIdx = Math.floor((i / half) * micData.length * 0.4);
+            const raw = micData[binIdx] / 255;
+            // Mirror: i and its opposite bar (BAR_COUNT-1-i)
+            smoothed[i] += (raw - smoothed[i]) * 0.3;
+            smoothed[BAR_COUNT - 1 - i] += (raw - smoothed[BAR_COUNT - 1 - i]) * 0.3;
+          }
+          for (let i = 0; i < BAR_COUNT; i++) {
+            heights[i] += smoothed[i] * 0.85;
+          }
+        }
+
+        // Clamp
+        for (let i = 0; i < BAR_COUNT; i++) heights[i] = Math.min(1, heights[i]);
+
+        // ── Color scheme ──────────────────────────────────────────────
+        const isSpeaking = state === 'speaking';
+        const litColor   = isSpeaking ? 'rgba(46,207,130,1)'   : 'rgba(255,255,255,1)';
+        const dimColor   = isSpeaking ? 'rgba(46,207,130,0.12)' : 'rgba(180,190,255,0.10)';
+        const glowColor  = isSpeaking ? 'rgba(46,207,130,0.9)'  : 'rgba(210,220,255,0.85)';
+
+        // ── Draw radial dot columns ───────────────────────────────────
+        for (let i = 0; i < BAR_COUNT; i++) {
+          const angle = (i / BAR_COUNT) * Math.PI * 2 - Math.PI / 2;
+          const ca = Math.cos(angle), sa = Math.sin(angle);
+          const barH = heights[i];
+          const litUpTo = Math.floor(barH * (DOT_SEGS - 1));
+
+          for (let s = 0; s < DOT_SEGS; s++) {
+            const t = s / (DOT_SEGS - 1);
+            const r = R_inner + t * (R_outer - R_inner);
+            const x = cx + ca * r;
+            const y = cy + sa * r;
+
+            if (s <= litUpTo) {
+              const isTop = s === litUpTo;
+              glowDot(x, y, DOT_R, litColor, isTop ? glowColor : null, DOT_R * 4);
+            } else {
+              glowDot(x, y, DOT_R * 0.5, dimColor, null, 0);
+            }
+          }
+        }
+      }
+
+      frame();
+    }
+
+    // ── Intervention playback ──────────────────────────────────────────────
+    function startIntervention(intervention) {
+      state = 'speaking';
+      dot.className     = 'speaking';
+      label.className   = 'speaking';
+      label.textContent = 'Speaking';
+      textEl.textContent = intervention.text;
+      textEl.classList.add('visible');
+
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+      speechSynthesis.cancel();
+
+      const onEnded = () => returnToListening();
+      const audio = new Audio(intervention.audio);
+      currentAudio = audio;
+
+      const useTTS = () => {
+        const utt = new SpeechSynthesisUtterance(intervention.text);
+        utt.rate  = 0.88;
+        utt.pitch = 1.0;
+        utt.onend = onEnded;
+        speechSynthesis.speak(utt);
+      };
+
+      audio.addEventListener('ended', onEnded);
+      audio.addEventListener('error', useTTS);
+      audio.play().catch(useTTS);
+    }
+
+    function returnToListening() {
+      state = 'listening';
+      currentAudio = null;
+      speechSynthesis.cancel();
+      dot.className     = 'listening';
+      label.className   = '';
+      label.textContent = 'Listening';
+      textEl.classList.remove('visible');
+      setTimeout(() => { textEl.textContent = ''; }, 560);
+      channel.postMessage({ type: 'listening' });
+    }
+
+    // ── BroadcastChannel ──────────────────────────────────────────────────
+    const channel = new BroadcastChannel('ai_mediator_v1');
+    channel.onmessage = (e) => {
+      if (e.data.type === 'trigger') startIntervention(e.data.intervention);
+      if (e.data.type === 'reset')   returnToListening();
+    };
+  </script>
+</body>
+</html>
