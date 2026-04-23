@@ -59,11 +59,20 @@
       font-weight: 300;
       letter-spacing: 0.015em;
       text-align: center;
+      /* Base state: hidden */
       opacity: 0;
       transition: opacity 0.55s ease;
     }
 
-    #intervention-text.visible { opacity: 1; }
+    /* "Dim" state: text is visible but muted, shown during the bell */
+    #intervention-text.dim {
+      opacity: 0.28;
+    }
+
+    /* "Bright" state: full brightness, shown once the voice starts */
+    #intervention-text.bright {
+      opacity: 1;
+    }
 
     /* ── Visualizer wrapper ──────────────────────────────────────────────── */
     #viz-wrap {
@@ -172,6 +181,7 @@
     let micData      = null;
     let phase        = 0;
     let currentAudio = null;
+    let bellAudio    = null;
 
     const BAR_COUNT = 100;
     const smoothed  = new Float32Array(BAR_COUNT).fill(0);
@@ -256,10 +266,8 @@
           analyser.getByteFrequencyData(micData);
           const half = Math.floor(BAR_COUNT / 2);
           for (let i = 0; i < half; i++) {
-            // Map 0…half to the useful low-mid frequency range (first 40% of bins)
             const binIdx = Math.floor((i / half) * micData.length * 0.4);
             const raw = micData[binIdx] / 255;
-            // Mirror: i and its opposite bar (BAR_COUNT-1-i)
             smoothed[i] += (raw - smoothed[i]) * 0.3;
             smoothed[BAR_COUNT - 1 - i] += (raw - smoothed[BAR_COUNT - 1 - i]) * 0.3;
           }
@@ -268,7 +276,6 @@
           }
         }
 
-        // Clamp
         for (let i = 0; i < BAR_COUNT; i++) heights[i] = Math.min(1, heights[i]);
 
         // ── Color scheme ──────────────────────────────────────────────
@@ -304,42 +311,81 @@
     }
 
     // ── Intervention playback ──────────────────────────────────────────────
+    //
+    // Sequence for every intervention:
+    //   1. Bell rings, visual flips to "speaking", text appears dim.
+    //   2. When the bell finishes, the voice starts and text goes to full brightness.
+    //   3. When the voice ends, we return to listening.
+    //
     function startIntervention(intervention) {
       state = 'speaking';
       dot.className     = 'speaking';
       label.className   = 'speaking';
       label.textContent = 'Speaking';
       textEl.textContent = intervention.text;
-      textEl.classList.add('visible');
 
+      // Dim state first; becomes bright when the voice actually begins.
+      textEl.classList.remove('bright');
+      textEl.classList.add('dim');
+
+      // Tear down anything still running from a previous trigger.
       if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+      if (bellAudio)    { bellAudio.pause();    bellAudio    = null; }
       speechSynthesis.cancel();
 
-      const onEnded = () => returnToListening();
-      const audio = new Audio(intervention.audio);
-      currentAudio = audio;
+      // Called when (and only when) the voice clip finishes.
+      const onVoiceEnded = () => returnToListening();
 
+      // TTS fallback used if either the bell or the voice mp3 fails to load.
       const useTTS = () => {
+        textEl.classList.remove('dim');
+        textEl.classList.add('bright');
         const utt = new SpeechSynthesisUtterance(intervention.text);
         utt.rate  = 0.88;
         utt.pitch = 1.0;
-        utt.onend = onEnded;
+        utt.onend = onVoiceEnded;
         speechSynthesis.speak(utt);
       };
 
-      audio.addEventListener('ended', onEnded);
-      audio.addEventListener('error', useTTS);
-      audio.play().catch(useTTS);
+      // Play the voice clip. Called after the bell finishes.
+      const playVoice = () => {
+        textEl.classList.remove('dim');
+        textEl.classList.add('bright');
+        const audio = new Audio(intervention.audio);
+        currentAudio = audio;
+        audio.addEventListener('ended', onVoiceEnded);
+        audio.addEventListener('error', useTTS);
+        audio.play().catch(useTTS);
+      };
+
+      // Play the bell first, then hand off to the voice clip.
+      const bell = new Audio('bell.mp3');
+      bellAudio  = bell;
+      bell.volume = 0.6; // a touch softer than the voice
+      bell.addEventListener('ended', () => {
+        bellAudio = null;
+        playVoice();
+      });
+      // If bell fails (missing file, etc.), skip straight to the voice.
+      bell.addEventListener('error', () => {
+        bellAudio = null;
+        playVoice();
+      });
+      bell.play().catch(() => {
+        bellAudio = null;
+        playVoice();
+      });
     }
 
     function returnToListening() {
       state = 'listening';
       currentAudio = null;
+      if (bellAudio) { bellAudio.pause(); bellAudio = null; }
       speechSynthesis.cancel();
       dot.className     = 'listening';
       label.className   = '';
       label.textContent = 'Listening';
-      textEl.classList.remove('visible');
+      textEl.classList.remove('dim', 'bright');
       setTimeout(() => { textEl.textContent = ''; }, 560);
       channel.postMessage({ type: 'listening' });
     }
