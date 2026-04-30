@@ -387,15 +387,54 @@
       label.textContent = 'Listening';
       textEl.classList.remove('dim', 'bright');
       setTimeout(() => { textEl.textContent = ''; }, 560);
+      // Same-browser report
       channel.postMessage({ type: 'listening' });
+      // Cross-device report (operators on other devices)
+      try { fetch('/api/intervention-listening', { method: 'POST' }); } catch (e) {}
     }
 
     // ── BroadcastChannel ──────────────────────────────────────────────────
+    // Same-browser delivery (legacy, still used when operator and mediator
+    // screens are open in tabs of the same browser).
     const channel = new BroadcastChannel('ai_mediator_v1');
+
+    // ── Cross-device delivery via Server-Sent Events ──────────────────────
+    // Lets the operator panel trigger this mediator screen from a different
+    // device — phone, tablet, another laptop. Both channels run in parallel;
+    // a short de-dupe window prevents the same intervention firing twice
+    // when both arrive close together.
+    let lastTriggerKey = '';
+    let lastTriggerAt  = 0;
+
+    function dispatchTrigger(intervention) {
+      const key = intervention && intervention.id ? intervention.id : '';
+      const now = Date.now();
+      if (key && key === lastTriggerKey && now - lastTriggerAt < 1500) return;
+      lastTriggerKey = key;
+      lastTriggerAt  = now;
+      startIntervention(intervention);
+    }
+
+    function dispatchReset() {
+      const now = Date.now();
+      if (now - lastTriggerAt < 200) return;
+      lastTriggerAt = now;
+      returnToListening();
+    }
+
     channel.onmessage = (e) => {
-      if (e.data.type === 'trigger') startIntervention(e.data.intervention);
-      if (e.data.type === 'reset')   returnToListening();
+      if (e.data.type === 'trigger') dispatchTrigger(e.data.intervention);
+      if (e.data.type === 'reset')   dispatchReset();
     };
+
+    try {
+      const es = new EventSource('/api/events?role=mediator');
+      es.onmessage = (e) => {
+        let d; try { d = JSON.parse(e.data); } catch (err) { return; }
+        if (d.type === 'trigger') dispatchTrigger(d.intervention);
+        if (d.type === 'reset')   dispatchReset();
+      };
+    } catch (e) { /* SSE unsupported, BroadcastChannel still works */ }
   </script>
 </body>
 </html>
