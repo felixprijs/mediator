@@ -25,6 +25,7 @@ const participants        = new Map();  // id → { id, name, joinedAt }
 const messageLog          = [];         // full audit trail for the session
 const operatorClients     = new Set();  // SSE res objects for operator panel(s)
 const participantClients  = new Map();  // id → Set of SSE res objects
+const mediatorClients     = new Set();  // SSE res objects for participant.html (the mediator screen)
 
 const uid = () => crypto.randomBytes(6).toString('hex');
 
@@ -51,6 +52,10 @@ function sseWrite(res, event) {
 
 function broadcastToOperators(event) {
   for (const res of operatorClients) sseWrite(res, event);
+}
+
+function broadcastToMediators(event) {
+  for (const res of mediatorClients) sseWrite(res, event);
 }
 
 function sendToParticipant(id, event) {
@@ -136,6 +141,38 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── POST /api/intervention — operator triggers an intervention on the mediator screen ──
+  // Body: { intervention: { id, title, text, audio } }
+  // Pushes the intervention to every connected mediator screen.
+  if (route === '/api/intervention' && req.method === 'POST') {
+    try {
+      const { intervention } = await readBody(req);
+      if (!intervention || !intervention.id) {
+        return sendJSON(res, 400, { error: 'intervention object required' });
+      }
+      broadcastToMediators({ type: 'trigger', intervention });
+      // Also include in operator-side state so other operator tabs can mirror status if needed.
+      broadcastToOperators({ type: 'intervention_triggered', intervention, at: Date.now() });
+      return sendJSON(res, 200, { ok: true });
+    } catch (e) {
+      return sendJSON(res, 400, { error: 'Invalid request' });
+    }
+  }
+
+  // ── POST /api/intervention-reset — operator returns mediator screens to listening ──
+  if (route === '/api/intervention-reset' && req.method === 'POST') {
+    broadcastToMediators({ type: 'reset' });
+    broadcastToOperators({ type: 'intervention_reset' });
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  // ── POST /api/intervention-listening — mediator screen reports it has finished playing ──
+  // Lets operator panels reflect the "back to listening" state without polling.
+  if (route === '/api/intervention-listening' && req.method === 'POST') {
+    broadcastToOperators({ type: 'intervention_listening' });
+    return sendJSON(res, 200, { ok: true });
+  }
+
   // ── GET /api/log — export full session log as JSON for analysis ──────────
   if (route === '/api/log' && req.method === 'GET') {
     res.writeHead(200, {
@@ -187,6 +224,13 @@ const server = http.createServer(async (req, res) => {
       req.on('close', () => {
         clearInterval(heartbeat);
         operatorClients.delete(res);
+      });
+    } else if (role === 'mediator') {
+      // The mediator screen (participant.html). Receives intervention triggers.
+      mediatorClients.add(res);
+      req.on('close', () => {
+        clearInterval(heartbeat);
+        mediatorClients.delete(res);
       });
     } else if (role === 'participant' && pid && participants.has(pid)) {
       if (!participantClients.has(pid)) participantClients.set(pid, new Set());
