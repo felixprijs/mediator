@@ -396,7 +396,16 @@
       if (activeBtn) activeBtn.classList.remove('triggered');
       activeBtn = btn;
       btn.classList.add('triggered');
+      // Same-browser path
       channel.postMessage({ type: 'trigger', intervention: iv });
+      // Cross-device path (works to phones, other laptops)
+      try {
+        fetch('/api/intervention', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intervention: iv }),
+        });
+      } catch (e) {}
       setStatus('speaking', `Speaking: ${iv.title}`);
       addLog(iv.title);
     }
@@ -404,6 +413,7 @@
     document.getElementById('reset-btn').addEventListener('click', () => {
       clearActive();
       channel.postMessage({ type: 'reset' });
+      try { fetch('/api/intervention-reset', { method: 'POST' }); } catch (e) {}
       setStatus('', 'Manually returned to listening');
     });
 
@@ -493,6 +503,13 @@
         participantsMap.clear();
         selectedId = null;
         render();
+      } else if (d.type === 'intervention_listening') {
+        // Mediator screen on another device finished playing.
+        clearActive();
+        setStatus('active', 'Listening — intervention finished');
+      } else if (d.type === 'intervention_reset') {
+        clearActive();
+        setStatus('', 'Manually returned to listening');
       }
     };
 
